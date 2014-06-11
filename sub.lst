@@ -1,0 +1,281 @@
+   1               	# 1 "sub.S"
+   1               	/*------------------------------------------------------------
+   0               	
+   0               	
+   2               	
+   3               		DISK II Emulator Farmware (2 of 2) for ATMEGA328P
+   4               	
+   5               		version 2.2	2013.10.25 by Koichi Nishida
+   6               		require version 2.0 hardware
+   7               	
+   8               		Copyright 2012 Koichi NISHIDA
+   9               		email to Koichi NISHIDA: tulip-house@msf.biglobe.ne.jp
+  10               		
+  11               	------------------------------------------------------------*/
+  12               	
+  13               	.equ PINB, 0x03
+  14               	.equ DDRB, 0x04
+  15               	.equ PORTB, 0x05
+  16               	.equ PINC, 0x06
+  17               	.equ DDRC, 0x07
+  18               	.equ PORTC, 0x08
+  19               	.equ PIND, 0x09
+  20               	.equ DDRD, 0x0a
+  21               	.equ PORTD, 0x0b
+  22               	.equ SREG, 0x3f
+  23               	
+  24               	.global __vector_1
+  25               	.global __vector_14
+  26               	.global wait5
+  27               	
+  28               	.global readPulse
+  29               	.global bitByte
+  30               	.global sector
+  31               	.global prepare
+  32               	.global writeData
+  33               	.global buffering
+  34               	.global writePtr
+  35               	
+  36               	.func wait5
+  37               	wait5:
+  38:sub.S         **** 	ldi r18,24
+  39               	wait51:
+  40:sub.S         **** 	nop
+  41:sub.S         **** 	dec r18
+  42:sub.S         **** 	brne wait51
+  43:sub.S         **** 	sbiw r24,1
+  44:sub.S         **** 	brne wait5
+  45:sub.S         **** 	ret
+  46               	.endfunc	
+  47               		
+  48               	.func wait1
+  49               	wait1:
+  50:sub.S         **** 	nop		; 1
+  51:sub.S         **** 	nop		; 1
+  52:sub.S         **** 	nop		; 1
+  53:sub.S         **** 	nop		; 1
+  54:sub.S         **** 	nop		; 1
+  55:sub.S         **** 	ret		; 4
+  56               	.endfunc
+  57               	
+  58               	.func __vector_14
+  59               	__vector_14:
+  60:sub.S         **** 	push	r26
+  61:sub.S         **** 	in		r26, SREG
+  62:sub.S         **** 	push	r26
+  63:sub.S         **** 	lds		r26,readPulse
+  64:sub.S         **** 	ori		r26,0b00100000
+  65:sub.S         **** 	out 	PORTC,r26
+  66               		
+  67:sub.S         **** 	push	r27				; 2
+  68:sub.S         **** 	push	r18				; 2
+  69:sub.S         **** 	ldi		r18,0			; 1
+  70:sub.S         **** 	rcall	wait1			; 20
+  71:sub.S         **** 	lds		r27,prepare		; 2
+  72:sub.S         **** 	and		r27,r27			; 1
+  73:sub.S         **** 	breq 	NOT_PREPARE		; 1/2
+  74:sub.S         **** 	ldi		r26,0b00100000	; 1
+  75               		
+  76:sub.S         **** 	out 	PORTC,r26		; 1
+  77:sub.S         **** 	sts		readPulse,r18
+  78:sub.S         **** 	pop		r18
+  79:sub.S         **** 	pop		r27
+  80:sub.S         **** 	pop		r26
+  81:sub.S         **** 	out		SREG,r26	
+  82:sub.S         **** 	pop		r26
+  83:sub.S         **** 	reti
+  84               	NOT_PREPARE:
+  85:sub.S         **** 	ldi		r26,0b00100000
+  86:sub.S         **** 	out 	PORTC,r26
+  87:sub.S         **** 	ldi		r26,0b00111000
+  88:sub.S         **** 	out		PORTB,r26
+  89:sub.S         **** 	in		r26,PINB
+  90:sub.S         **** 	andi	r26,0b00010000
+  91:sub.S         **** 	mov		r18,r26
+  92:sub.S         **** 	ldi		r26,0b00011000
+  93:sub.S         **** 	out		PORTB,r26
+  94:sub.S         **** 	lds		r26,bitbyte
+  95:sub.S         **** 	lds		r27,(bitbyte+1)
+  96:sub.S         **** 	adiw	r26,1
+  97:sub.S         **** 	sts		bitbyte,r26
+  98:sub.S         **** 	sts		(bitbyte+1),r27
+  99:sub.S         **** 	cpi		r26,((402*8)%256)
+ 100:sub.S         **** 	brne	LBL1
+ 101:sub.S         **** 	cpi		r27,((402*8)/256)
+ 102:sub.S         **** 	brne	LBL1
+ 103               		; set prepare flag
+ 104:sub.S         **** 	ldi		r26,1
+ 105:sub.S         **** 	sts		prepare,r26
+ 106               		; discard 112 byte (including CRC 2 byte)
+ 107:sub.S         **** 	push	r28
+ 108:sub.S         **** 	push	r29
+ 109:sub.S         **** 	ldi		r28,112
+ 110:sub.S         **** 	ldi		r27,0b00111000
+ 111:sub.S         **** 	ldi		r29,0b00011000
+ 112               	DSC_LP2:
+ 113:sub.S         **** 	ldi		r26,8
+ 114               	DSC_LP1:
+ 115:sub.S         **** 	out		PORTB,r27
+ 116:sub.S         **** 	out		PORTB,r29
+ 117:sub.S         **** 	dec		r26
+ 118:sub.S         **** 	brne	DSC_LP1
+ 119:sub.S         **** 	dec		r28
+ 120:sub.S         **** 	brne	DSC_LP2
+ 121:sub.S         **** 	pop		r29
+ 122:sub.S         **** 	pop		r28
+ 123               	LBL1:
+ 124:sub.S         **** 	sts		readPulse,r18
+ 125:sub.S         **** 	pop		r18
+ 126:sub.S         **** 	pop		r27
+ 127:sub.S         **** 	pop		r26
+ 128:sub.S         **** 	out		SREG,r26	
+ 129:sub.S         **** 	pop		r26
+ 130:sub.S         **** 	reti
+ 131               	.endfunc
+ 132               	
+ 133               	.func __vector_1
+ 134               	__vector_1:
+ 135:sub.S         **** 	push	r18			; 1
+ 136:sub.S         **** 	in		r18, SREG	; 1
+ 137:sub.S         **** 	push	r18			; 1
+ 138:sub.S         **** 	sbic	PIND,7
+ 139:sub.S         **** 	rjmp	NOT_ENABLE
+ 140:sub.S         **** 	push	r19			; 2
+ 141:sub.S         **** 	lds		r19,magState; 2
+ 142               	WLP8:
+ 143               		; wait start bit 1
+ 144:sub.S         **** 	in		r18,PINB	; 1
+ 145:sub.S         **** 	andi	r18,2		; 1
+ 146:sub.S         **** 	eor		r18,r19		; 1
+ 147:sub.S         **** 	breq	WLP8		; 2/1
+ 148:sub.S         **** 	in		r18,PINB	; 1
+ 149:sub.S         **** 	andi	r18,2		; 1
+ 150:sub.S         **** 	sts		magState,r18; 2
+ 151:sub.S         **** 	ldi		r18, 8		; 1
+ 152               	WLP9:
+ 153:sub.S         **** 	dec		r18			; 1
+ 154:sub.S         **** 	brne	WLP9		; 2
+ 155:sub.S         **** 	nop					; 1
+ 156:sub.S         **** 	push	r20			; 2
+ 157:sub.S         **** 	push	r21			; 2
+ 158:sub.S         **** 	push	r22			; 2
+ 159:sub.S         **** 	push	r23			; 2
+ 160:sub.S         **** 	push	r24			; 2
+ 161:sub.S         **** 	push	r30			; 2
+ 162:sub.S         **** 	push	r31			; 2
+ 163:sub.S         **** 	ldi		r22,0		; 1 start storing
+ 164:sub.S         **** 	lds		r30,(writePtr)
+ 165:sub.S         **** 	lds		r31,(writePtr+1)
+ 166:sub.S         **** 	ldi		r19,lo8(349) ;1
+ 167:sub.S         **** 	ldi		r20,hi8(349) ;1 
+ 168:sub.S         **** 	rjmp	ENTR		; 2
+ 169               	WLP2:
+ 170:sub.S         **** 	lds		r21,magState; 2
+ 171               	WLP6:
+ 172               		; wait start bit 1
+ 173:sub.S         **** 	in		r23,PINB	; 1
+ 174:sub.S         **** 	andi	r23,2		; 1
+ 175:sub.S         **** 	eor		r23,r21		; 1
+ 176:sub.S         **** 	breq	WLP6		; 2/1
+ 177:sub.S         **** 	in		r23,PINB	; 1
+ 178:sub.S         **** 	andi	r23,2		; 1
+ 179:sub.S         **** 	sts		magState,r23; 2
+ 180:sub.S         **** 	ldi		r23, 14		; 1
+ 181               	WLP7:
+ 182:sub.S         **** 	dec		r23			; 1
+ 183:sub.S         **** 	brne	WLP7		; 2
+ 184               	ENTR:
+ 185:sub.S         **** 	ldi		r18,7		; 1
+ 186:sub.S         **** 	ldi		r24,1		; 1
+ 187               	WLP1:
+ 188:sub.S         **** 	in		r23,PIND	; 1
+ 189:sub.S         **** 	andi	r23,4		; 1
+ 190:sub.S         **** 	brne	WRITE_END	; 1	
+ 191:sub.S         **** 	nop					; 1	
+ 192:sub.S         **** 	ldi		r23, 30		; 1
+ 193               	WLP3:
+ 194:sub.S         **** 	dec		r23			; 1
+ 195:sub.S         **** 	brne	WLP3		; 2
+ 196               	WLP5:
+ 197:sub.S         **** 	in		r23,PINB 	; 1
+ 198:sub.S         **** 	andi	r23,2		; 1
+ 199:sub.S         **** 	lds		r21,magState; 2
+ 200:sub.S         **** 	sts		magState,r23; 2
+ 201:sub.S         **** 	eor		r23,r21		; 1
+ 202:sub.S         **** 	lsr		r23			; 1
+ 203:sub.S         **** 	nop					; 1
+ 204:sub.S         **** 	lsl		r24			; 1
+ 205:sub.S         **** 	or		r24,r23		; 1
+ 206:sub.S         **** 	dec		r18			; 1
+ 207:sub.S         **** 	brne	WLP1		; 2/1
+ 208:sub.S         **** 	cpi		r24,0xD5	; 1
+ 209:sub.S         **** 	brne	NOT_START	; 2/1
+ 210:sub.S         **** 	ldi		r22,1		; 1
+ 211               	NOT_START:
+ 212:sub.S         **** 	cpi		r22,0		; 1
+ 213:sub.S         **** 	breq	WLP2		; 1
+ 214:sub.S         **** 	st		Z+,r24		; 2
+ 215:sub.S         **** 	subi	r19,1		; 1
+ 216:sub.S         **** 	sbci	r20,0		; 1
+ 217:sub.S         **** 	brne	WLP2		; 2/1
+ 218               	WRITE_END:
+ 219:sub.S         **** 	ldi		r21,1
+ 220:sub.S         **** 	sts		doBuffering,r21
+ 221:sub.S         **** 	pop		r31
+ 222:sub.S         **** 	pop		r30
+ 223:sub.S         **** 	pop		r24
+ 224:sub.S         **** 	pop		r23
+ 225:sub.S         **** 	pop		r22
+ 226:sub.S         **** 	pop		r21
+ 227:sub.S         **** 	pop		r20
+ 228:sub.S         **** 	pop		r19
+ 229               	NOT_ENABLE:
+ 230:sub.S         **** 	pop		r18
+ 231:sub.S         **** 	out		SREG,r18	
+ 232:sub.S         **** 	pop		r18
+ 233:sub.S         **** 	reti
+ 234               	.endfunc
+DEFINED SYMBOLS
+               sub.S:13     *ABS*:00000003 PINB
+               sub.S:14     *ABS*:00000004 DDRB
+               sub.S:15     *ABS*:00000005 PORTB
+               sub.S:16     *ABS*:00000006 PINC
+               sub.S:17     *ABS*:00000007 DDRC
+               sub.S:18     *ABS*:00000008 PORTC
+               sub.S:19     *ABS*:00000009 PIND
+               sub.S:20     *ABS*:0000000a DDRD
+               sub.S:21     *ABS*:0000000b PORTD
+               sub.S:22     *ABS*:0000003f SREG
+               sub.S:134    .text:000000aa __vector_1
+               sub.S:59     .text:0000001a __vector_14
+               sub.S:37     .text:00000000 wait5
+               sub.S:39     .text:00000002 wait51
+               sub.S:49     .text:0000000e wait1
+               sub.S:84     .text:0000004c NOT_PREPARE
+               sub.S:123    .text:0000009a LBL1
+               sub.S:112    .text:00000088 DSC_LP2
+               sub.S:114    .text:0000008a DSC_LP1
+               sub.S:229    .text:0000015e NOT_ENABLE
+               sub.S:142    .text:000000ba WLP8
+               sub.S:152    .text:000000cc WLP9
+               sub.S:184    .text:0000010a ENTR
+               sub.S:169    .text:000000f0 WLP2
+               sub.S:171    .text:000000f4 WLP6
+               sub.S:181    .text:00000106 WLP7
+               sub.S:187    .text:0000010e WLP1
+               sub.S:218    .text:00000148 WRITE_END
+               sub.S:193    .text:00000118 WLP3
+               sub.S:196    .text:0000011c WLP5
+               sub.S:211    .text:0000013c NOT_START
+
+UNDEFINED SYMBOLS
+readPulse
+bitByte
+sector
+prepare
+writeData
+buffering
+writePtr
+bitbyte
+magState
+doBuffering
