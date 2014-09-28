@@ -796,6 +796,10 @@ int main(void)
 	DDRB = 0b00101100;	
 	DDRC = 0b00110000;
 	DDRD = 0b00110000;
+	
+	/* PORTD0 acts as an input */
+	/* turn on the pull up on PD0 (pin2) */
+	PORTD |= (1 << PORTD0);
 
 	sei();
 
@@ -807,6 +811,10 @@ int main(void)
 	// pc interrupt for head move
 	PCMSK1 = 0b00001111;
 	PCICR = (1<<PCIE1);
+    
+	/* Turn pin change interrupt on PORD0 */
+	PCICR |= (1 << PCIE2);    
+	PCMSK2 |= (1 << PCINT16);  
 
 	unsigned long i;
 
@@ -1058,4 +1066,11 @@ ISR(INT1_vect)
 	PORTC &= (~0b00100000);
 }
 	
-	
+/* Interrupt handler for PORTD0 (pin 2) */
+ISR (PCINT2_vect)
+{
+	/* Turn off the led when PORTD0 is LOW */	
+	if ((PIND & (1 << PIND0)) == 0) {
+		PORTD &= ~(0b00100000);		
+	}
+}
