@@ -51,6 +51,7 @@ connection:
 #include <avr/interrupt.h>
 #include <avr/pgmspace.h>
 #include <avr/eeprom.h>
+#include <util/delay.h>
 
 #define nop() __asm__ __volatile__ ("nop")
 #define WAIT 1
@@ -64,6 +65,8 @@ connection:
 
 // for selecting SD card
 #define SD_CS	2	// PB2 SS	CS
+
+#define MAX_FILES_PER_DIR 512
 
 // C prototypes
 
@@ -89,7 +92,7 @@ void cmd17(unsigned long adr);
 
 // ===== file manipulate functions =====
 
-int findExt(char *str, unsigned char *protect, unsigned char *name);
+int findExt(char *str, unsigned char *protect, unsigned char *name, uint16_t file_index_offset);
 // prepare the FAT table on memory
 void prepareFat(int i, unsigned short *fat, unsigned short len,
 	unsigned char fatNum, unsigned char fatElemNum);
@@ -144,9 +147,11 @@ unsigned char magState;
 unsigned char protect;
 unsigned char formatting;
 const unsigned char volume = 0xfe;
-
 // track number is stored on eeprom.
-#define EEP_PH_TRACK (uint8_t *)0x0001
+#define EEP_PH_TRACK (uint8_t *)0x01
+
+/* Track the current selected disk image on eeprom */
+#define EEP_CURRENT_DISK_IMAGE (uint8_t *) 0x02
 
 // write data buffer
 unsigned char writeData[BUF_NUM][350];
@@ -154,6 +159,9 @@ unsigned char sectors[BUF_NUM], tracks[BUF_NUM];
 unsigned char buffNum;
 unsigned char *writePtr;
 unsigned char doBuffering;
+
+/* nic file index */
+volatile  uint16_t current_disk_image = 0;
 
 // a table for head stepper moter movement 
 PROGMEM const prog_uchar stepper_table[4] = {0x0f,0xed,0x03,0x21};
@@ -197,6 +205,21 @@ PROGMEM const prog_uchar FlipBit[] = { 0,  2,  1,  3  };
 PROGMEM const prog_uchar FlipBit1[] = { 0, 2,  1,  3  };
 PROGMEM const prog_uchar FlipBit2[] = { 0, 8,  4,  12 };
 PROGMEM const prog_uchar FlipBit3[] = { 0, 32, 16, 48 };
+
+/* This is for debugging purposes */
+void blink_led(unsigned char blink)
+{
+	unsigned short i = 0;
+	for (i = 0; i < blink; i++) {
+		PORTD |= 0b00100000;		// LED on
+		_delay_ms(20);
+		PORTD &= ~(0b00100000);	// LED off
+		_delay_ms(20);
+		PORTD |= 0b00100000;		// LED on
+		_delay_ms(20);
+		PORTD &= ~(0b00100000);	// LED off
+	}
+}
 
 // buffer clear
 void buffClear(void)
@@ -305,16 +328,14 @@ void cmd17(unsigned long adr)
 }
 
 // find a file extension
-int findExt(char *str, unsigned char *protect, unsigned char *name)
+int findExt(char *str, unsigned char *protect, unsigned char *name, uint16_t file_index_offset)
 {
 	short i;
 	unsigned max_file = 512;
-	unsigned short max_time = 0, max_date = 0;
 
 	// find NIC extension
-	for (i=0; i!=512; i++) {
+	for (i = file_index_offset; i != MAX_FILES_PER_DIR; i++) {
 		unsigned char ext[3], d;
-		unsigned char time[2], date[2];
 		
 		// check first char
 		cmd(16, 1);
@@ -334,21 +355,10 @@ int findExt(char *str, unsigned char *protect, unsigned char *name)
 		ext[0] = readByte(); ext[1] = readByte(); ext[2] = readByte();
 		if (protect) *protect = ((readByte()&1)<<4); else readByte();
 		readByte(); readByte(); // discard CRC bytes
-		// check time stamp
-		cmd(16, 4);
-		cmd17(rootAddr+i*32+22);
-		time[0] = readByte(); time[1] = readByte();
-		date[0] = readByte(); date[1] = readByte();
-		readByte(); readByte(); // discard CRC bytes
 		if ((ext[0]==str[0])&&(ext[1]==str[1])&&(ext[2]==str[2])) {
-			unsigned short tm = *(unsigned short *)time;
-			unsigned short dt = *(unsigned short *)date;
-
-			if ((dt>max_date)||((dt==max_date)&&(tm>=max_time))) {
-				max_time = tm;
-				max_date = dt;
-				max_file = i;
-			}
+			/* if we found a file entry,  store the index and break from the loop */
+			max_file = i;
+			break;
 		}
 	}
 	if ((max_file != 512) && (name != 0)) {
@@ -357,6 +367,11 @@ int findExt(char *str, unsigned char *protect, unsigned char *name)
 		cmd17(rootAddr+max_file*32);
 		for (j=0; j<8; j++) name[j] = readByte();
 		readByte(); readByte();
+		/* Write file name to eeprom */
+		eeprom_busy_wait();
+		eeprom_write_block((const void*)name, 0x10, 8);
+		eeprom_busy_wait();
+
 	}
 	return max_file;
 	// if 512 then not found...
@@ -738,13 +753,13 @@ int SDinit(void)
 	}
 
 	// find "NIC" extension
-	nicDir = findExt("NIC", &protect, (unsigned char *)0);
+	nicDir = findExt("NIC", &protect, filebase, current_disk_image);
 	if (nicDir == 512) {		// create NIC file if not exists
 		// find "DSK" extension
-		dskDir = findExt("DSK", (unsigned char *)0, filebase);
+		dskDir = findExt("DSK", (unsigned char *)0, filebase, current_disk_image);
 		if (dskDir == 512) return 0;
 		if (!createNic(filebase)) return 0;
-		nicDir = findExt("NIC", &protect, (unsigned char *)0);
+		nicDir = findExt("NIC", &protect, (unsigned char *)0, current_disk_image);
 		if (nicDir == 512) return 0;
 		// convert DSK image to NIC image
 		dsk2Nic();
@@ -801,10 +816,19 @@ int main(void)
 	/* turn on the pull up on PD0 (pin2) */
 	PORTD |= (1 << PORTD0);
 
+	/* PORTD1 acts as an input */
+	/* turn on the pull up on PD1 (pin3) */
+	PORTD |= (1 << PORTD1);
+
 	sei();
 
 	eeprom_busy_wait();
 	ph_track = eeprom_read_byte(EEP_PH_TRACK);
+	eeprom_busy_wait();
+	current_disk_image = eeprom_read_word(EEP_CURRENT_DISK_IMAGE);
+	if (current_disk_image >= 512) {
+		current_disk_image = 0;
+	}
 	if (ph_track > 196) ph_track = 0;	
 	if (ph_track > 139) ph_track = 139;
 
@@ -815,6 +839,7 @@ int main(void)
 	/* Turn pin change interrupt on PORD0 */
 	PCICR |= (1 << PCIE2);    
 	PCMSK2 |= (1 << PCINT16);  
+	PCMSK2 |= (1 << PCINT17);  
 
 	unsigned long i;
 
@@ -1069,8 +1094,24 @@ ISR(INT1_vect)
 /* Interrupt handler for PORTD0 (pin 2) */
 ISR (PCINT2_vect)
 {
-	/* Turn off the led when PORTD0 is LOW */	
+	/* If button on PORTD0 is pressed */
+	/* increment the disk image index and restart */
 	if ((PIND & (1 << PIND0)) == 0) {
 		PORTD &= ~(0b00100000);		
+		++current_disk_image;
+		eeprom_busy_wait();
+		eeprom_write_word(EEP_CURRENT_DISK_IMAGE, current_disk_image);
+		eeprom_busy_wait();
+		PORTC &= (~0b00100000);
+	}
+	/* If button on PORTD1 is pressed */
+	/* reset the disk image index to 0 and restart */
+	if ((PIND & (1 << PIND1)) == 0) {
+		PORTD |= 0b00100000;		// LED on
+		current_disk_image = 0;
+		eeprom_busy_wait();
+		eeprom_write_word(EEP_CURRENT_DISK_IMAGE, current_disk_image);
+		eeprom_busy_wait();
+		PORTC &= (~0b00100000);
 	}
 }
